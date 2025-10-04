@@ -175,12 +175,17 @@ private:
 
     MobilityFeedbackPacket feedback_ {};
 
+    bool connection_log_occurred_ = false;
     bool connect_to_device(uint32_t device_id) {
-        RCLCPP_INFO(this->get_logger(), "Listing all available devices: ");
+        if (!connection_log_occurred_) {
+            RCLCPP_INFO(this->get_logger(), "Listing all available devices: ");
+        }
         auto available_devices = protocol_->list_all_devices();
 
         if (available_devices.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "No devices available");
+            if (!connection_log_occurred_) {
+                RCLCPP_ERROR(this->get_logger(), "No devices available");
+            }
         }
         for (const auto& device : available_devices) {
             RCLCPP_INFO(this->get_logger(), "\t%s", device.c_str());
@@ -209,6 +214,7 @@ private:
                             if (res) {
                                 RCLCPP_INFO(this->get_logger(), "Init mode enabled");
                                 res = init_motor_controller();
+                                connection_log_occurred_ = false;
                             } else {
                                 RCLCPP_ERROR(this->get_logger(), "Could not enable init mode");
                             }
@@ -222,6 +228,8 @@ private:
                         if (res) {
                             RCLCPP_INFO(this->get_logger(), "Init mode enabled");
                             res = init_motor_controller();
+                            connection_log_occurred_ = false;
+
                         } else {
                             RCLCPP_ERROR(this->get_logger(), "Could not enable init mode");
                         }
@@ -236,7 +244,10 @@ private:
             }
         }
         if (!res) {
-            RCLCPP_ERROR(this->get_logger(), "Device did not found");
+            if (!connection_log_occurred_) {
+                RCLCPP_ERROR(this->get_logger(), "Device did not found");
+            }
+            connection_log_occurred_ = true;
             protocol_->close();
             return false;
         }
@@ -326,13 +337,13 @@ private:
             wheel_encoder_velocities_steps_sec[i] = feedback_.velocities[i];
         }
         if ((current_time - prev_log_time_).seconds() >= 0.1) {
-            RCLCPP_INFO(this->get_logger(), "PWM: D0:%.2f, D1:%.2f, D2:%.2f, D3:%.2f",
+            RCLCPP_DEBUG(this->get_logger(), "PWM: D0:%.2f, D1:%.2f, D2:%.2f, D3:%.2f",
                 feedback_.pwm_duties[0], feedback_.pwm_duties[1], feedback_.pwm_duties[2], feedback_.pwm_duties[3]);
-            RCLCPP_INFO(this->get_logger(), "Pos: P0:%.2f, P1:%.2f, P2:%.2f, P3:%.2f",
+            RCLCPP_DEBUG(this->get_logger(), "Pos: P0:%.2f, P1:%.2f, P2:%.2f, P3:%.2f",
                 feedback_.positions[0], feedback_.positions[1], feedback_.positions[2], feedback_.positions[3]);
-            RCLCPP_INFO(this->get_logger(), "Vel: V0:%.2f, V1:%.2f, V2:%.2f, V3:%.2f",
+            RCLCPP_DEBUG(this->get_logger(), "Vel: V0:%.2f, V1:%.2f, V2:%.2f, V3:%.2f",
                 feedback_.velocities[0], feedback_.velocities[1], feedback_.velocities[2], feedback_.velocities[3]);
-            RCLCPP_INFO(this->get_logger(), "TargetVel: T0:%.2f, T1:%.2f, T2:%.2f, T3:%.2f",
+            RCLCPP_DEBUG(this->get_logger(), "TargetVel: T0:%.2f, T1:%.2f, T2:%.2f, T3:%.2f",
                 target_velocities_[0], target_velocities_[1], target_velocities_[2], target_velocities_[3]);
             prev_log_time_ = current_time;
             /*RCLCPP_INFO(this->get_logger(), "Pos: P0:%.2f, P1:%.2f, P2:%.2f, P3:%.2f",
