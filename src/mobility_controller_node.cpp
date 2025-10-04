@@ -150,7 +150,7 @@ private:
     double cmd_vel_timeout_sec_ = 0.5;
 
     bool is_open_loop_ = true;
-    bool encoders_connected_ = true;
+    bool encoders_connected_ = false;
 
     bool linear_x_has_velocity_limits_ = false;
     double linear_x_max_velocity_ = 1.0;
@@ -160,7 +160,7 @@ private:
     double angular_z_max_velocity_ = 1.0;
     double angular_z_min_velocity_ = -1.0;
 
-    std::string serial_port_ { "/dev/ttyACM0" };
+    int64_t device_id_ { MOBILITY_DEVICE_ID };
     std::string device_ { "/dev/ttyACM0" };
 
     std::array<float, 4> target_velocities_ { 0, 0, 0, 0 };
@@ -553,7 +553,7 @@ private:
     void init_parameters() {
 
         protocol_type_ = this->declare_parameter("protocol", protocol_type_);
-        serial_port_ = this->declare_parameter("serial_port", serial_port_);
+        device_id_ = this->declare_parameter("device_id", device_id_);
 
         command_publish_rate_hz_ = this->declare_parameter("command_publish_rate", command_publish_rate_hz_);
         feedback_rate_hz_ = this->declare_parameter("feedback_rate", feedback_rate_hz_);

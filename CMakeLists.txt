@@ -19,22 +19,22 @@ find_package(tf2_ros REQUIRED)
 
 set(CXX_STANDARD 20)
 
-add_executable(mobility_control
-  src/mobility_control_node.cpp
+add_executable(${PROJECT_NAME}
+  src/mobility_controller_node.cpp
   src/serialib.cpp
   src/icommunication_protocol.cpp
   src/usb_protocol.cpp
   )
-target_include_directories(mobility_control PRIVATE
+target_include_directories(${PROJECT_NAME} PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/include
 )
 
-ament_target_dependencies(mobility_control rclcpp sensor_msgs nav_msgs geometry_msgs
+ament_target_dependencies(${PROJECT_NAME} rclcpp sensor_msgs nav_msgs geometry_msgs
     tf2 tf2_ros)
   
 
 install(TARGETS
-  mobility_control
+  ${PROJECT_NAME}
   DESTINATION lib/${PROJECT_NAME})
 
 install(
