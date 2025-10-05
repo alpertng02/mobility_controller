@@ -305,7 +305,7 @@ private:
 
             enable_timers(false);
 
-            bool res = connect_to_device(MOBILITY_DEVICE_ID);
+            bool res = connect_to_device(device_id_);
             if (res) {
                 communication_established_ = true;
                 enable_timers(true);
