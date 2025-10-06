@@ -409,34 +409,34 @@ private:
         tf2::Quaternion odomQuat {};
         odomQuat.setRPY(0, 0, heading_);
 
-        nav_msgs::msg::Odometry odomMsg {};
-        odomMsg.header.stamp = current_time;
-        odomMsg.header.frame_id = odom_frame_id_;
-        odomMsg.child_frame_id = base_frame_id_;
+        nav_msgs::msg::Odometry odom_msg {};
+        odom_msg.header.stamp = current_time;
+        odom_msg.header.frame_id = odom_frame_id_;
+        odom_msg.child_frame_id = base_frame_id_;
 
-        odomMsg.pose.pose.position.x = pos_x_;
-        odomMsg.pose.pose.position.y = pos_y_;
-        odomMsg.pose.pose.position.z = 0.0;
-        odomMsg.pose.pose.orientation.x = odomQuat.x();
-        odomMsg.pose.pose.orientation.y = odomQuat.y();
-        odomMsg.pose.pose.orientation.z = odomQuat.z();
-        odomMsg.pose.pose.orientation.w = odomQuat.w();
+        odom_msg.pose.pose.position.x = pos_x_;
+        odom_msg.pose.pose.position.y = pos_y_;
+        odom_msg.pose.pose.position.z = 0.0;
+        odom_msg.pose.pose.orientation.x = odomQuat.x();
+        odom_msg.pose.pose.orientation.y = odomQuat.y();
+        odom_msg.pose.pose.orientation.z = odomQuat.z();
+        odom_msg.pose.pose.orientation.w = odomQuat.w();
 
 
-        odomMsg.twist.twist.linear.x = robot_linear_velocity;
-        odomMsg.twist.twist.linear.y = 0.0;
-        odomMsg.twist.twist.linear.z = 0.0;
-        odomMsg.twist.twist.angular.x = 0.0;
-        odomMsg.twist.twist.angular.y = 0.0;
-        odomMsg.twist.twist.angular.z = robot_angular_velocity;
+        odom_msg.twist.twist.linear.x = robot_linear_velocity;
+        odom_msg.twist.twist.linear.y = 0.0;
+        odom_msg.twist.twist.linear.z = 0.0;
+        odom_msg.twist.twist.angular.x = 0.0;
+        odom_msg.twist.twist.angular.y = 0.0;
+        odom_msg.twist.twist.angular.z = robot_angular_velocity;
 
         for (size_t i = 0; i < pose_covariance_diagonal_.size(); i++) {
-            if (i * 7 < odomMsg.pose.covariance.size()) {
-                odomMsg.pose.covariance[i * 7] = pose_covariance_diagonal_[i];
-                odomMsg.twist.covariance[i * 7] = twist_covariance_diagonal_[i];
+            if (i * 7 < odom_msg.pose.covariance.size()) {
+                odom_msg.pose.covariance[i * 7] = pose_covariance_diagonal_[i];
+                odom_msg.twist.covariance[i * 7] = twist_covariance_diagonal_[i];
             }
         }
-        odom_publisher_->publish(odomMsg);
+        odom_publisher_->publish(odom_msg);
 
 
         wheel_joint_states_.header.frame_id = base_frame_id_;
@@ -466,10 +466,10 @@ private:
         bool res = false;
         if (is_open_loop_) {
             double max_velocity = linear_x_max_velocity_;
-            wheel_velocities[front_left] = (left_vel / max_velocity) * 100.0;
-            wheel_velocities[back_left] = (left_vel / max_velocity) * 100.0;
-            wheel_velocities[front_right] = (right_vel / max_velocity) * 100.0;
-            wheel_velocities[back_right] = (right_vel / max_velocity) * 100.0;
+            wheel_velocities[front_left] = std::clamp((left_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
+            wheel_velocities[back_left] = std::clamp((left_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
+            wheel_velocities[front_right] = std::clamp((right_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
+            wheel_velocities[back_right] = std::clamp((right_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
             res = protocol_->send_pwm_duty(wheel_velocities);
         } else {
             wheel_velocities[front_left] = left_vel * wheel_reduction_ * wheel_encoder_cpr_ / (2.0 * M_PI * wheel_radius_);
