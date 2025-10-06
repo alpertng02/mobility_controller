@@ -131,7 +131,7 @@ private:
     std::vector<double> pose_covariance_diagonal_ { 0.002, 0.002, 0.0, 0.0, 0.0, 0.02 };
     std::vector<double> twist_covariance_diagonal_ { 0.002, 0.0, 0.0, 0.0, 0.0, 0.02 };
 
-    double max_pwm_dutycycle_ { 80.0 };
+    double max_pwm_dutycycle_ { 60.0 };
     double max_velocity_ { 30000.0 };
     double velocity_filter_cutoff_hz_ { 100.0 };
 
