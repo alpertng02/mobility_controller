@@ -160,6 +160,14 @@ private:
     double angular_z_max_velocity_ = 1.0;
     double angular_z_min_velocity_ = -1.0;
 
+    bool linear_x_has_acceleration_limits_ = false;
+    double linear_x_max_acceleration_ = 5.0;
+    double linear_x_min_acceleration_ = -5.0;
+
+    bool angular_z_has_acceleration_limits_ = false;
+    double angular_z_max_acceleration_ = 5.0;
+    double angular_z_min_acceleration_ = -5.0;
+
     int64_t device_id_ { MOBILITY_DEVICE_ID };
     std::string device_ { "/dev/ttyACM0" };
 
@@ -169,6 +177,8 @@ private:
     rclcpp::Time prev_odom_time_ { this->get_clock()->now() };
     rclcpp::Time prev_log_time_ { this->get_clock()->now() };
     geometry_msgs::msg::Twist cmd_vel_;
+    geometry_msgs::msg::Twist prev_cmd_vel_ {};
+
     double heading_ {};
     double pos_x_ {};
     double pos_y_ {};
@@ -314,18 +324,48 @@ private:
     }
 
     void cmd_vel_callback(const geometry_msgs::msg::Twist& msg) {
-        prev_cmd_vel_time_ = this->get_clock()->now();
-        if (linear_x_has_velocity_limits_) {
-            cmd_vel_.linear.x = std::clamp(msg.linear.x, linear_x_min_velocity_, linear_x_max_velocity_);
+        rclcpp::Time current_time = this->get_clock()->now();
+        double dt = (current_time - prev_cmd_vel_time_).seconds();
+        prev_cmd_vel_time_ = current_time;
+
+        // Linear x acceleration limiting
+        if (linear_x_has_acceleration_limits_) {
+            double max_linear_x_increase = linear_x_max_acceleration_ * dt;
+            double max_linear_x_decrease = linear_x_min_acceleration_ * dt;
+            double delta_v = msg.linear.x - prev_cmd_vel_.linear.x;
+            if (delta_v > max_linear_x_increase) {
+                delta_v = max_linear_x_increase;
+            } else if (delta_v < max_linear_x_decrease) {
+                delta_v = max_linear_x_decrease;
+            }
+            cmd_vel_.linear.x = prev_cmd_vel_.linear.x + delta_v;
         } else {
             cmd_vel_.linear.x = msg.linear.x;
         }
-        if (angular_z_has_velocity_limits_) {
-            cmd_vel_.angular.z = std::clamp(msg.angular.z, angular_z_min_velocity_, angular_z_max_velocity_);
+
+        // Linear x acceleration limiting
+        if (angular_z_has_acceleration_limits_) {
+            double max_angular_z_increase = angular_z_max_acceleration_ * dt;
+            double max_angular_z_decrease = angular_z_min_acceleration_ * dt;
+            double delta_v = msg.angular.z - prev_cmd_vel_.angular.z;
+            if (delta_v > max_angular_z_increase) {
+                delta_v = max_angular_z_increase;
+            } else if (delta_v < max_angular_z_decrease) {
+                delta_v = max_angular_z_decrease;
+            }
+            cmd_vel_.angular.z = prev_cmd_vel_.angular.z + delta_v;
         } else {
             cmd_vel_.angular.z = msg.angular.z;
         }
 
+        if (linear_x_has_velocity_limits_) {
+            cmd_vel_.linear.x = std::clamp(cmd_vel_.linear.x, linear_x_min_velocity_, linear_x_max_velocity_);
+        }
+        if (angular_z_has_velocity_limits_) {
+            cmd_vel_.angular.z = std::clamp(cmd_vel_.angular.z, angular_z_min_velocity_, angular_z_max_velocity_);
+        }
+
+        prev_cmd_vel_ = cmd_vel_;
     }
 
     void publish_odometry_and_joint_states() {
@@ -337,13 +377,13 @@ private:
             wheel_encoder_velocities_steps_sec[i] = feedback_.velocities[i];
         }
         if ((current_time - prev_log_time_).seconds() >= 0.1) {
-            RCLCPP_DEBUG(this->get_logger(), "PWM: D0:%.2f, D1:%.2f, D2:%.2f, D3:%.2f",
+            RCLCPP_INFO(this->get_logger(), "PWM: D0:%.2f, D1:%.2f, D2:%.2f, D3:%.2f",
                 feedback_.pwm_duties[0], feedback_.pwm_duties[1], feedback_.pwm_duties[2], feedback_.pwm_duties[3]);
-            RCLCPP_DEBUG(this->get_logger(), "Pos: P0:%.2f, P1:%.2f, P2:%.2f, P3:%.2f",
+            RCLCPP_INFO(this->get_logger(), "Pos: P0:%.2f, P1:%.2f, P2:%.2f, P3:%.2f",
                 feedback_.positions[0], feedback_.positions[1], feedback_.positions[2], feedback_.positions[3]);
-            RCLCPP_DEBUG(this->get_logger(), "Vel: V0:%.2f, V1:%.2f, V2:%.2f, V3:%.2f",
+            RCLCPP_INFO(this->get_logger(), "Vel: V0:%.2f, V1:%.2f, V2:%.2f, V3:%.2f",
                 feedback_.velocities[0], feedback_.velocities[1], feedback_.velocities[2], feedback_.velocities[3]);
-            RCLCPP_DEBUG(this->get_logger(), "TargetVel: T0:%.2f, T1:%.2f, T2:%.2f, T3:%.2f",
+            RCLCPP_INFO(this->get_logger(), "TargetVel: T0:%.2f, T1:%.2f, T2:%.2f, T3:%.2f",
                 target_velocities_[0], target_velocities_[1], target_velocities_[2], target_velocities_[3]);
             prev_log_time_ = current_time;
             /*RCLCPP_INFO(this->get_logger(), "Pos: P0:%.2f, P1:%.2f, P2:%.2f, P3:%.2f",
@@ -470,6 +510,7 @@ private:
             wheel_velocities[back_left] = std::clamp((left_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
             wheel_velocities[front_right] = std::clamp((right_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
             wheel_velocities[back_right] = std::clamp((right_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
+
             res = protocol_->send_pwm_duty(wheel_velocities);
         } else {
             wheel_velocities[front_left] = left_vel * wheel_reduction_ * wheel_encoder_cpr_ / (2.0 * M_PI * wheel_radius_);
@@ -602,9 +643,13 @@ private:
         linear_x_max_velocity_ = this->declare_parameter("linear.x.max_velocity", linear_x_max_velocity_);
         linear_x_min_velocity_ = this->declare_parameter("linear.x.min_velocity", linear_x_min_velocity_);
 
-        angular_z_has_velocity_limits_ = this->declare_parameter("angular.z.has_velocity_limits", angular_z_has_velocity_limits_);
-        angular_z_max_velocity_ = this->declare_parameter("angular.z.max_velocity", angular_z_max_velocity_);
-        angular_z_min_velocity_ = this->declare_parameter("angular.z.min_velocity", angular_z_min_velocity_);
+        linear_x_has_acceleration_limits_ = this->declare_parameter("linear.x.has_acceleration_limits", linear_x_has_acceleration_limits_);
+        linear_x_max_acceleration_ = this->declare_parameter("linear.x.max_acceleration", linear_x_max_acceleration_);
+        linear_x_min_acceleration_ = this->declare_parameter("linear.x.min_acceleration", linear_x_min_acceleration_);
+
+        angular_z_has_acceleration_limits_ = this->declare_parameter("angular.z.has_acceleration_limits", angular_z_has_acceleration_limits_);
+        angular_z_max_acceleration_ = this->declare_parameter("angular.z.max_acceleration", angular_z_max_acceleration_);
+        angular_z_min_acceleration_ = this->declare_parameter("angular.z.min_acceleration", angular_z_min_acceleration_);
     }
 
 };
