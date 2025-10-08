@@ -14,7 +14,7 @@ mobility_controller:
 
     wheel_joint_names: ["front_left_wheel_joint", "front_right_wheel_joint", "back_left_wheel_joint", "back_right_wheel_joint"]
     wheel_separation: 0.788
-    wheel_radius: 0.11736
+    wheel_radius: 0.15
     wheel_reduction: 100.0
     wheel_encoder_cpr: 64.0
 
