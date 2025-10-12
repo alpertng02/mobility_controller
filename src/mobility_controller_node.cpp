@@ -25,9 +25,7 @@
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_ros/transform_broadcaster.h"
 
-#include "mobility_packets.h"
-#include "icommunication_protocol.hpp"
-#include "usb_protocol.hpp"
+#include "usb_device.hpp"
 
 class MobilityControlNode : public rclcpp::Node {
 
@@ -37,14 +35,14 @@ public:
         init_parameters();
 
         cmd_vel_subscriber_ = this->create_subscription<geometry_msgs::msg::Twist>(cmd_vel_topic_,
-            rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_sensor_data)),
+            rclcpp::SensorDataQoS(),
             std::bind(&MobilityControlNode::cmd_vel_callback, this, std::placeholders::_1));
 
-        jointStatePublisher_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_states_topic_,
-            rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_system_default)));
+        joint_state_publisher_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_states_topic_,
+            rclcpp::SystemDefaultsQoS());
 
         odom_publisher_ = this->create_publisher<nav_msgs::msg::Odometry>(odom_topic_,
-            rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_system_default)));
+            rclcpp::SystemDefaultsQoS());
 
         size_t jointCount = wheel_joint_names_.size();
         wheel_joint_states_.name.reserve(jointCount);
@@ -59,23 +57,23 @@ public:
 
         // Initialize timers but keep them disabled
         odom_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(static_cast<int64_t>(1000.0 / feedback_rate_hz_)),
+            std::chrono::duration<double, std::milli>(1000.0 / feedback_rate_hz_),
             std::bind(&MobilityControlNode::publish_odometry_and_joint_states, this));
         odom_timer_->cancel();
-        controller_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(static_cast<int64_t>(1000.0 / command_publish_rate_hz_)),
+        command_timer_ = this->create_wall_timer(
+            std::chrono::duration<double, std::milli>(1000.0 / command_publish_rate_hz_),
             std::bind(&MobilityControlNode::command_controller, this));
-        controller_timer_->cancel();
+        command_timer_->cancel();
 
         if (protocol_type_ == "usb") {
-            protocol_ = std::make_unique<UsbProtocol>();
+            device_ = std::make_unique<UsbMobilityDevice>();
         } else {
             RCLCPP_FATAL(this->get_logger(), "Unsupported protocol: %s", protocol_type_.c_str());
             throw std::runtime_error("Unsupported protocol");
         }
-        communication_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(static_cast<int64_t>(1000.0 / feedback_rate_hz_)),
-            std::bind(&MobilityControlNode::communication_loop, this));
+        device_connection_timer_ = this->create_wall_timer(
+            std::chrono::duration<double, std::milli>(1000.0 * reconnection_retry_period_sec_),
+            std::bind(&MobilityControlNode::device_connection_callback, this));
 
     }
 private:
@@ -87,16 +85,14 @@ private:
         back_right = 3
     };
 
-    std::unique_ptr<ICommunicationProtocol> protocol_;
-
-    MobilityFeedbackPacket latest_feedback_ {};
+    std::unique_ptr<IMobilityDevice> device_;
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscriber_ {};
-    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr jointStatePublisher_ {};
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_publisher_ {};
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_publisher_ {};
     rclcpp::TimerBase::SharedPtr odom_timer_ {};
-    rclcpp::TimerBase::SharedPtr controller_timer_ {};
-    rclcpp::TimerBase::SharedPtr communication_timer_ {};
+    rclcpp::TimerBase::SharedPtr command_timer_ {};
+    rclcpp::TimerBase::SharedPtr device_connection_timer_ {};
     sensor_msgs::msg::JointState wheel_joint_states_ {};
 
     std::string protocol_type_ { "usb" };
@@ -144,8 +140,10 @@ private:
     double pid_d_bound_ { 50.0f };
 
     double motor_control_rate_hz_ = 1000.0;
-    double feedback_rate_hz_ = 200.0;
-    double command_publish_rate_hz_ = 50.0;
+    double feedback_rate_hz_ = 100.0;
+    double command_publish_rate_hz_ = 100.0;
+
+    double reconnection_retry_period_sec_ { 1.0 };
 
     double cmd_vel_timeout_sec_ = 0.5;
 
@@ -168,433 +166,335 @@ private:
     double angular_z_max_acceleration_ = 5.0;
     double angular_z_min_acceleration_ = -5.0;
 
-    int64_t device_id_ { MOBILITY_DEVICE_ID };
-    std::string device_ { "/dev/ttyACM0" };
-
     std::array<float, 4> target_velocities_ { 0, 0, 0, 0 };
 
     rclcpp::Time prev_cmd_vel_time_ { this->get_clock()->now() };
     rclcpp::Time prev_odom_time_ { this->get_clock()->now() };
     rclcpp::Time prev_log_time_ { this->get_clock()->now() };
-    geometry_msgs::msg::Twist cmd_vel_;
-    geometry_msgs::msg::Twist prev_cmd_vel_ {};
+    rclcpp::Time prev_command_time_ { this->get_clock()->now() };
+
+    geometry_msgs::msg::Twist cmd_vel_received_ {};
+    geometry_msgs::msg::Twist target_cmd_vel_ {};
+    geometry_msgs::msg::Twist prev_target_cmd_vel_ {};
 
     double heading_ {};
     double pos_x_ {};
     double pos_y_ {};
 
-    MobilityFeedbackPacket feedback_ {};
+    mobility::packets::Feedback feedback_ {};
 
-    bool connection_log_occurred_ = false;
-    bool connect_to_device(uint32_t device_id) {
-        if (!connection_log_occurred_) {
-            RCLCPP_INFO(this->get_logger(), "Listing all available devices: ");
-        }
-        auto available_devices = protocol_->list_all_devices();
-
-        if (available_devices.empty()) {
-            if (!connection_log_occurred_) {
-                RCLCPP_ERROR(this->get_logger(), "No devices available");
-            }
-        }
-        for (const auto& device : available_devices) {
-            RCLCPP_INFO(this->get_logger(), "\t%s", device.c_str());
-        }
-
-        MobilityStatePacket state_packet {};
-        bool res = false;
-        for (const auto& device : available_devices) {
-
-            protocol_->close();
-            res = protocol_->open(device);
-            if (res) {
-                RCLCPP_INFO(this->get_logger(), "Connected to %s", device.c_str());
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                RCLCPP_INFO(this->get_logger(), "Requesting Device ID");
-                res = protocol_->request_device_state();
-                if (res) {
-                    RCLCPP_INFO(this->get_logger(), "Device ID Requested");
-                    res = protocol_->receive_state_feedback(&state_packet, std::chrono::milliseconds(10));
-                    if (!res) {
-                        RCLCPP_ERROR(this->get_logger(), "Device did not send ID.");
-                        res = protocol_->receive_motor_feedback(&feedback_, std::chrono::milliseconds(10));
-                        if (res) {
-                            RCLCPP_INFO(this->get_logger(), "Device is already running");
-                            res = protocol_->send_init_mode_enable(true);
-                            if (res) {
-                                RCLCPP_INFO(this->get_logger(), "Init mode enabled");
-                                res = init_motor_controller();
-                                connection_log_occurred_ = false;
-                            } else {
-                                RCLCPP_ERROR(this->get_logger(), "Could not enable init mode");
-                            }
-                            break;
-                        }
-                    } else if (state_packet.device_id == device_id) {
-                        RCLCPP_INFO(this->get_logger(), "Device ID matched: %u", state_packet.device_id);
-                        RCLCPP_INFO(this->get_logger(), "Enabling init mode");
-                        device_ = device;
-                        res = protocol_->send_init_mode_enable(true);
-                        if (res) {
-                            RCLCPP_INFO(this->get_logger(), "Init mode enabled");
-                            res = init_motor_controller();
-                            connection_log_occurred_ = false;
-
-                        } else {
-                            RCLCPP_ERROR(this->get_logger(), "Could not enable init mode");
-                        }
-                        break;
-                    } else {
-                        RCLCPP_ERROR(this->get_logger(), "Device ID did not match: %u", state_packet.device_id);
-                    }
-
-                } else {
-                    RCLCPP_ERROR(this->get_logger(), "Device state request could not be sent.");
-                }
-            }
-        }
-        if (!res) {
-            if (!connection_log_occurred_) {
-                RCLCPP_ERROR(this->get_logger(), "Device did not found");
-            }
-            connection_log_occurred_ = true;
-            protocol_->close();
-            return false;
-        }
-
-        /*if (state_packet.init_mode_enabled) {
-            RCLCPP_INFO(this->get_logger(), "Device is in init mode");
-            res = init_motor_controller();
-        } else {
-            RCLCPP_INFO(this->get_logger(), "Device is in already running. Enabling init mode");
-            if (protocol_->send_init_mode_enable(true)) {
-                if (protocol_->request_device_state()) {
-                    if (protocol_->receive_state_feedback(&state_packet, std::chrono::milliseconds(100))) {
-                        if (state_packet.init_mode_enabled) {
-                            RCLCPP_INFO(this->get_logger(), "Device is in init mode");
-                            res = init_motor_controller();
-                        }
-                    }
-                }
-            }
-        }*/
-
-        return res;
-    }
 
     void enable_timers(bool enable) {
         if (enable) {
             if (odom_timer_->is_canceled()) {
                 RCLCPP_INFO(this->get_logger(), "Enabling odometry and control timers.");
                 odom_timer_->reset();
-                controller_timer_->reset();
+                command_timer_->reset();
             }
         } else {
             if (!odom_timer_->is_canceled()) {
                 RCLCPP_WARN(this->get_logger(), "Disabling odometry and control timers.");
                 odom_timer_->cancel();
-                controller_timer_->cancel();
+                command_timer_->cancel();
             }
         }
     }
 
-    bool communication_established_ = false;
+    bool try_connect_device(std::chrono::milliseconds timeout) {
 
-    void communication_loop() {
-        if (protocol_->is_open()) {
-            MobilityFeedbackPacket fb;
-            if (protocol_->receive_motor_feedback(&fb, std::chrono::milliseconds(1))) {
-                latest_feedback_ = fb;
+        auto available_ports = device_->list_all_ports();
+
+        if (available_ports.empty()) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *get_clock(), 5000, "No ports available");
+            return false;
+        }
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *get_clock(), 5000, "Available ports:");
+        for (const auto& port : available_ports) {
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *get_clock(), 5000, "\t%s\n", port.c_str());
+        }
+
+        for (const auto& port : available_ports) {
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *get_clock(), 5000, "Trying to connect to port: %s", port.c_str());
+            if (!device_->open(port)) {
+                RCLCPP_INFO_THROTTLE(this->get_logger(), *get_clock(), 5000, "Port %s cannot open!", port.c_str());
+                continue;
             }
-        } else {
-
-            if (communication_established_) {
-                RCLCPP_ERROR(this->get_logger(), "Device connection lost. Trying to reconnect to %s", device_.c_str());
-                communication_established_ = false;
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *get_clock(), 5000, "Connected to port: %s", port.c_str());
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *get_clock(), 5000, "Trying to initialize device...");
+            if (device_->init_device(this->get_init_packet(), timeout)) {
+                RCLCPP_INFO_THROTTLE(this->get_logger(), *get_clock(), 5000, "Device is initialized!");
+                return true;
+            } else {
+                RCLCPP_INFO_THROTTLE(this->get_logger(), *get_clock(), 5000, "Could not initialize device...");
+                device_->close();
             }
+        }
+        return false;
+    }
 
+    void device_connection_callback() {
+        if (!device_->is_open()) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Device Disconnected");
             enable_timers(false);
-
-            bool res = connect_to_device(device_id_);
-            if (res) {
-                communication_established_ = true;
+            if (try_connect_device(std::chrono::milliseconds(200))) {
+                RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "Device Connected");
+                prev_odom_time_ = this->get_clock()->now();
                 enable_timers(true);
             }
         }
     }
 
     void cmd_vel_callback(const geometry_msgs::msg::Twist& msg) {
-        rclcpp::Time current_time = this->get_clock()->now();
-        double dt = (current_time - prev_cmd_vel_time_).seconds();
-        prev_cmd_vel_time_ = current_time;
+        prev_cmd_vel_time_ = this->get_clock()->now();
 
-        // Linear x acceleration limiting
-        if (linear_x_has_acceleration_limits_) {
-            double max_linear_x_increase = linear_x_max_acceleration_ * dt;
-            double max_linear_x_decrease = linear_x_min_acceleration_ * dt;
-            double delta_v = msg.linear.x - prev_cmd_vel_.linear.x;
-            if (delta_v > max_linear_x_increase) {
-                delta_v = max_linear_x_increase;
-            } else if (delta_v < max_linear_x_decrease) {
-                delta_v = max_linear_x_decrease;
-            }
-            cmd_vel_.linear.x = prev_cmd_vel_.linear.x + delta_v;
-        } else {
-            cmd_vel_.linear.x = msg.linear.x;
-        }
-
-        // Linear x acceleration limiting
-        if (angular_z_has_acceleration_limits_) {
-            double max_angular_z_increase = angular_z_max_acceleration_ * dt;
-            double max_angular_z_decrease = angular_z_min_acceleration_ * dt;
-            double delta_v = msg.angular.z - prev_cmd_vel_.angular.z;
-            if (delta_v > max_angular_z_increase) {
-                delta_v = max_angular_z_increase;
-            } else if (delta_v < max_angular_z_decrease) {
-                delta_v = max_angular_z_decrease;
-            }
-            cmd_vel_.angular.z = prev_cmd_vel_.angular.z + delta_v;
-        } else {
-            cmd_vel_.angular.z = msg.angular.z;
-        }
+        cmd_vel_received_ = msg;
 
         if (linear_x_has_velocity_limits_) {
-            cmd_vel_.linear.x = std::clamp(cmd_vel_.linear.x, linear_x_min_velocity_, linear_x_max_velocity_);
+            cmd_vel_received_.linear.x = std::clamp(cmd_vel_received_.linear.x, linear_x_min_velocity_, linear_x_max_velocity_);
         }
         if (angular_z_has_velocity_limits_) {
-            cmd_vel_.angular.z = std::clamp(cmd_vel_.angular.z, angular_z_min_velocity_, angular_z_max_velocity_);
+            cmd_vel_received_.angular.z = std::clamp(cmd_vel_received_.angular.z, angular_z_min_velocity_, angular_z_max_velocity_);
         }
-
-        prev_cmd_vel_ = cmd_vel_;
     }
+
 
     void publish_odometry_and_joint_states() {
         rclcpp::Time current_time = this->get_clock()->now();
         double dt = (current_time - prev_odom_time_).seconds();
 
-        feedback_ = latest_feedback_;
-        for (int i = 0; i < 4; i++) {
-            wheel_encoder_velocities_steps_sec[i] = feedback_.velocities[i];
-        }
-        if ((current_time - prev_log_time_).seconds() >= 0.1) {
-            RCLCPP_INFO(this->get_logger(), "PWM: D0:%.2f, D1:%.2f, D2:%.2f, D3:%.2f",
+        try {
+            feedback_ = device_->receive_motor_feedback(std::chrono::milliseconds(20)).feedback;
+
+            for (int i = 0; i < 4; i++) {
+                wheel_encoder_velocities_steps_sec[i] = feedback_.velocities[i];
+            }
+
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 100, "PWM: D0:%.2f, D1:%.2f, D2:%.2f, D3:%.2f",
                 feedback_.pwm_duties[0], feedback_.pwm_duties[1], feedback_.pwm_duties[2], feedback_.pwm_duties[3]);
-            RCLCPP_INFO(this->get_logger(), "Pos: P0:%.2f, P1:%.2f, P2:%.2f, P3:%.2f",
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 100, "Pos: P0:%.2f, P1:%.2f, P2:%.2f, P3:%.2f",
                 feedback_.positions[0], feedback_.positions[1], feedback_.positions[2], feedback_.positions[3]);
-            RCLCPP_INFO(this->get_logger(), "Vel: V0:%.2f, V1:%.2f, V2:%.2f, V3:%.2f",
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 100, "Vel: V0:%.2f, V1:%.2f, V2:%.2f, V3:%.2f",
                 feedback_.velocities[0], feedback_.velocities[1], feedback_.velocities[2], feedback_.velocities[3]);
-            RCLCPP_INFO(this->get_logger(), "TargetVel: T0:%.2f, T1:%.2f, T2:%.2f, T3:%.2f",
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 100, "TargetVel: T0:%.2f, T1:%.2f, T2:%.2f, T3:%.2f",
                 target_velocities_[0], target_velocities_[1], target_velocities_[2], target_velocities_[3]);
             prev_log_time_ = current_time;
-            /*RCLCPP_INFO(this->get_logger(), "Pos: P0:%.2f, P1:%.2f, P2:%.2f, P3:%.2f",
-                feedback_.positions[0], feedback_.positions[1], feedback_.positions[2], feedback_.positions[3]);
-            prev_log_time_ = current_time;*/
+
+            
+            double robot_linear_velocity = 0;
+            double robot_angular_velocity = 0;
+            double left_side_velocity = 0;
+            double right_side_velocity = 0;
+            std::vector<double>wheel_angular_velocities { 0.0, 0.0, 0.0, 0.0 };
+            
+            if (!encoders_connected_) {
+                
+                robot_linear_velocity = target_cmd_vel_.linear.x;
+                robot_angular_velocity = target_cmd_vel_.angular.z;
+                
+                left_side_velocity = robot_linear_velocity - (wheel_separation_ / 2.0) * robot_angular_velocity;
+                right_side_velocity = robot_linear_velocity + (wheel_separation_ / 2.0) * robot_angular_velocity;
+                
+                wheel_angular_velocities[front_left] = left_side_velocity / wheel_radius_;
+                wheel_angular_velocities[back_left] = left_side_velocity / wheel_radius_;
+                wheel_angular_velocities[front_right] = right_side_velocity / wheel_radius_;
+                wheel_angular_velocities[back_right] = right_side_velocity / wheel_radius_;
+                
+            } else {
+                for (size_t i = 0; i < wheel_encoder_velocities_steps_sec.size(); i++) {
+                    double motor_rotations_per_sec = wheel_encoder_velocities_steps_sec[i] / (wheel_encoder_cpr_ * wheel_reduction_);
+                    wheel_angular_velocities[i] = motor_rotations_per_sec * 2.0 * M_PI;
+                }
+                
+                left_side_velocity =
+                (wheel_angular_velocities[front_left] + wheel_angular_velocities[back_left]) / 2.0;
+                right_side_velocity =
+                (wheel_angular_velocities[front_right] + wheel_angular_velocities[back_right]) / 2.0;
+                
+                robot_linear_velocity = (left_side_velocity + right_side_velocity) / 2.0;
+                robot_angular_velocity = (right_side_velocity - left_side_velocity) / wheel_separation_;
+            }
+            
+            double delta_heading = robot_angular_velocity * dt;
+            double delta_x = (robot_linear_velocity * cos(heading_)) * dt;
+            double delta_y = (robot_linear_velocity * sin(heading_)) * dt;
+            
+            pos_x_ += delta_x;
+            pos_y_ += delta_y;
+            heading_ += delta_heading;
+            
+            // https://github.com/linorobot/linorobot/blob/master/src/lino_base.cpp
+            
+            tf2::Quaternion odomQuat {};
+            odomQuat.setRPY(0, 0, heading_);
+            
+            nav_msgs::msg::Odometry odom_msg {};
+            odom_msg.header.stamp = current_time;
+            odom_msg.header.frame_id = odom_frame_id_;
+            odom_msg.child_frame_id = base_frame_id_;
+            
+            odom_msg.pose.pose.position.x = pos_x_;
+            odom_msg.pose.pose.position.y = pos_y_;
+            odom_msg.pose.pose.position.z = 0.0;
+            odom_msg.pose.pose.orientation.x = odomQuat.x();
+            odom_msg.pose.pose.orientation.y = odomQuat.y();
+            odom_msg.pose.pose.orientation.z = odomQuat.z();
+            odom_msg.pose.pose.orientation.w = odomQuat.w();
+            
+            
+            odom_msg.twist.twist.linear.x = robot_linear_velocity;
+            odom_msg.twist.twist.linear.y = 0.0;
+            odom_msg.twist.twist.linear.z = 0.0;
+            odom_msg.twist.twist.angular.x = 0.0;
+            odom_msg.twist.twist.angular.y = 0.0;
+            odom_msg.twist.twist.angular.z = robot_angular_velocity;
+            
+            for (size_t i = 0; i < pose_covariance_diagonal_.size(); i++) {
+                if (i * 7 < odom_msg.pose.covariance.size()) {
+                    odom_msg.pose.covariance[i * 7] = pose_covariance_diagonal_[i];
+                    odom_msg.twist.covariance[i * 7] = twist_covariance_diagonal_[i];
+                }
+            }
+            odom_publisher_->publish(odom_msg);
+            
+            
+            wheel_joint_states_.header.frame_id = base_frame_id_;
+            wheel_joint_states_.header.stamp = current_time;
+            for (size_t i = 0; i < wheel_joint_names_.size(); i++) {
+                wheel_joint_states_.velocity[i] = wheel_angular_velocities[i];
+                if (is_open_loop_) {
+                    wheel_joint_states_.position[i] += wheel_joint_states_.velocity[i] * dt;
+                } else {
+                    wheel_joint_states_.position[i] = feedback_.positions[i] * 2.0 * M_PI / (wheel_encoder_cpr_ * wheel_reduction_);
+                }
+            }
+            joint_state_publisher_->publish(wheel_joint_states_);
+            
+            prev_odom_time_ = current_time;
+
+        } catch (std::runtime_error& err) {
+            RCLCPP_WARN(this->get_logger(), "Could not receive joint feedbacks");
         }
+    }
+    
+    void command_controller() {
+        
+        auto current_time = this->get_clock()->now();
+        double dt = (current_time - prev_command_time_).seconds();
+        prev_command_time_ = current_time;
+
+        std::array<float, mobility::packets::k_motor_count> wheel_velocities {};
+
+        // Copy the latest received cmd_vel
+
+        target_cmd_vel_ = cmd_vel_received_;
 
         if ((current_time - prev_cmd_vel_time_).seconds() > cmd_vel_timeout_sec_) {
-            cmd_vel_.linear.x = 0.0;
-            cmd_vel_.linear.y = 0.0;
-            cmd_vel_.linear.z = 0.0;
-            cmd_vel_.angular.x = 0.0;
-            cmd_vel_.angular.y = 0.0;
-            cmd_vel_.angular.z = 0.0;
+            target_cmd_vel_.linear.x = 0.0;
+            target_cmd_vel_.linear.y = 0.0;
+            target_cmd_vel_.linear.z = 0.0;
+            target_cmd_vel_.angular.x = 0.0;
+            target_cmd_vel_.angular.y = 0.0;
+            target_cmd_vel_.angular.z = 0.0;
         }
 
-        prev_odom_time_ = current_time;
-
-        double robot_linear_velocity = 0;
-        double robot_angular_velocity = 0;
-        double left_side_velocity = 0;
-        double right_side_velocity = 0;
-        std::vector<double>wheel_angular_velocities { 0.0, 0.0, 0.0, 0.0 };
-
-        if (!encoders_connected_) {
-
-            robot_linear_velocity = cmd_vel_.linear.x;
-            robot_angular_velocity = cmd_vel_.angular.z;
-
-            left_side_velocity = robot_linear_velocity - (wheel_separation_ / 2.0) * robot_angular_velocity;
-            right_side_velocity = robot_linear_velocity + (wheel_separation_ / 2.0) * robot_angular_velocity;
-
-            wheel_angular_velocities[front_left] = left_side_velocity / wheel_radius_;
-            wheel_angular_velocities[back_left] = left_side_velocity / wheel_radius_;
-            wheel_angular_velocities[front_right] = right_side_velocity / wheel_radius_;
-            wheel_angular_velocities[back_right] = right_side_velocity / wheel_radius_;
-
-        } else {
-            for (size_t i = 0; i < wheel_encoder_velocities_steps_sec.size(); i++) {
-                double motor_rotations_per_sec = wheel_encoder_velocities_steps_sec[i] / (wheel_encoder_cpr_ * wheel_reduction_);
-                wheel_angular_velocities[i] = motor_rotations_per_sec * 2.0 * M_PI;
-            }
-
-            left_side_velocity =
-                (wheel_angular_velocities[front_left] + wheel_angular_velocities[back_left]) / 2.0;
-            right_side_velocity =
-                (wheel_angular_velocities[front_right] + wheel_angular_velocities[back_right]) / 2.0;
-
-            robot_linear_velocity = (left_side_velocity + right_side_velocity) / 2.0;
-            robot_angular_velocity = (right_side_velocity - left_side_velocity) / wheel_separation_;
+        // --- Linear X acceleration limiting ---
+        if (linear_x_has_acceleration_limits_) {
+            double delta_v = target_cmd_vel_.linear.x - prev_target_cmd_vel_.linear.x;
+            double max_increase = linear_x_max_acceleration_ * dt;
+            double max_decrease = linear_x_min_acceleration_ * dt;
+            delta_v = std::clamp(delta_v, max_decrease, max_increase);
+            target_cmd_vel_.linear.x = prev_target_cmd_vel_.linear.x + delta_v;
         }
 
-        double delta_heading = robot_angular_velocity * dt;
-        double delta_x = (robot_linear_velocity * cos(heading_)) * dt;
-        double delta_y = (robot_linear_velocity * sin(heading_)) * dt;
-
-        pos_x_ += delta_x;
-        pos_y_ += delta_y;
-        heading_ += delta_heading;
-
-        // https://github.com/linorobot/linorobot/blob/master/src/lino_base.cpp
-
-        tf2::Quaternion odomQuat {};
-        odomQuat.setRPY(0, 0, heading_);
-
-        nav_msgs::msg::Odometry odom_msg {};
-        odom_msg.header.stamp = current_time;
-        odom_msg.header.frame_id = odom_frame_id_;
-        odom_msg.child_frame_id = base_frame_id_;
-
-        odom_msg.pose.pose.position.x = pos_x_;
-        odom_msg.pose.pose.position.y = pos_y_;
-        odom_msg.pose.pose.position.z = 0.0;
-        odom_msg.pose.pose.orientation.x = odomQuat.x();
-        odom_msg.pose.pose.orientation.y = odomQuat.y();
-        odom_msg.pose.pose.orientation.z = odomQuat.z();
-        odom_msg.pose.pose.orientation.w = odomQuat.w();
-
-
-        odom_msg.twist.twist.linear.x = robot_linear_velocity;
-        odom_msg.twist.twist.linear.y = 0.0;
-        odom_msg.twist.twist.linear.z = 0.0;
-        odom_msg.twist.twist.angular.x = 0.0;
-        odom_msg.twist.twist.angular.y = 0.0;
-        odom_msg.twist.twist.angular.z = robot_angular_velocity;
-
-        for (size_t i = 0; i < pose_covariance_diagonal_.size(); i++) {
-            if (i * 7 < odom_msg.pose.covariance.size()) {
-                odom_msg.pose.covariance[i * 7] = pose_covariance_diagonal_[i];
-                odom_msg.twist.covariance[i * 7] = twist_covariance_diagonal_[i];
-            }
+        // --- Angular Z acceleration limiting ---
+        if (angular_z_has_acceleration_limits_) {
+            double delta_v = target_cmd_vel_.angular.z - prev_target_cmd_vel_.angular.z;
+            double max_increase = angular_z_max_acceleration_ * dt;
+            double max_decrease = angular_z_min_acceleration_ * dt;
+            delta_v = std::clamp(delta_v, max_decrease, max_increase);
+            target_cmd_vel_.angular.z = prev_target_cmd_vel_.angular.z + delta_v;
         }
-        odom_publisher_->publish(odom_msg);
 
-
-        wheel_joint_states_.header.frame_id = base_frame_id_;
-        wheel_joint_states_.header.stamp = current_time;
-        for (size_t i = 0; i < wheel_joint_names_.size(); i++) {
-            wheel_joint_states_.velocity[i] = wheel_angular_velocities[i];
-            if (is_open_loop_) {
-                wheel_joint_states_.position[i] += wheel_joint_states_.velocity[i] * dt;
-            } else {
-                wheel_joint_states_.position[i] = feedback_.positions[i] * 2.0 * M_PI / (wheel_encoder_cpr_ * wheel_reduction_);
-            }
+        // --- Velocity limits (final clamp) ---
+        if (linear_x_has_velocity_limits_) {
+            target_cmd_vel_.linear.x = std::clamp(target_cmd_vel_.linear.x, linear_x_min_velocity_, linear_x_max_velocity_);
         }
-        jointStatePublisher_->publish(wheel_joint_states_);
+        if (angular_z_has_velocity_limits_) {
+            target_cmd_vel_.angular.z = std::clamp(target_cmd_vel_.angular.z, angular_z_min_velocity_, angular_z_max_velocity_);
+        }
 
-    }
+        // Update stored velocity
+        prev_target_cmd_vel_ = target_cmd_vel_;
 
-    void command_controller() {
-        std::array<float, 4> wheel_velocities { 0, 0, 0, 0 };
-
-        double v = cmd_vel_.linear.x;     // robot linear velocity
-        double w = cmd_vel_.angular.z;    // robot angular velocity
+        // --- Use filtered velocity values for control ---
+        double v = target_cmd_vel_.linear.x;
+        double w = target_cmd_vel_.angular.z;
 
         // Differential drive kinematics
         double left_vel = v - (wheel_separation_ / 2.0) * w;
         double right_vel = v + (wheel_separation_ / 2.0) * w;
 
         bool res = false;
-        if (is_open_loop_) {
-            double max_velocity = linear_x_max_velocity_;
-            wheel_velocities[front_left] = std::clamp((left_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
-            wheel_velocities[back_left] = std::clamp((left_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
-            wheel_velocities[front_right] = std::clamp((right_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
-            wheel_velocities[back_right] = std::clamp((right_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
 
-            res = protocol_->send_pwm_duty(wheel_velocities);
+        if (is_open_loop_) {
+            double max_velocity = std::max(std::abs(linear_x_max_velocity_), 1e-6); // avoid division by zero
+
+            wheel_velocities[front_left] = std::clamp((left_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
+            wheel_velocities[back_left] = wheel_velocities[front_left];
+            wheel_velocities[front_right] = std::clamp((right_vel / max_velocity) * 100.0, -max_pwm_dutycycle_, max_pwm_dutycycle_);
+            wheel_velocities[back_right] = wheel_velocities[front_right];
+
+            res = device_->send_motor_dutycycles(wheel_velocities);
         } else {
             wheel_velocities[front_left] = left_vel * wheel_reduction_ * wheel_encoder_cpr_ / (2.0 * M_PI * wheel_radius_);
-            wheel_velocities[back_left] = left_vel * wheel_reduction_ * wheel_encoder_cpr_ / (2.0 * M_PI * wheel_radius_);
+            wheel_velocities[back_left] = wheel_velocities[front_left];
             wheel_velocities[front_right] = right_vel * wheel_reduction_ * wheel_encoder_cpr_ / (2.0 * M_PI * wheel_radius_);
-            wheel_velocities[back_right] = right_vel * wheel_reduction_ * wheel_encoder_cpr_ / (2.0 * M_PI * wheel_radius_);
+            wheel_velocities[back_right] = wheel_velocities[front_right];
+
             target_velocities_ = wheel_velocities;
-            res = protocol_->send_target_velocity(wheel_velocities);
+            res = device_->send_motor_velocities(wheel_velocities);
         }
+
         if (!res) {
             enable_timers(false);
         }
-
     }
 
-    bool init_motor_controller() {
-        try {
 
-            MobilityInitPacket pkt {};
+    mobility::packets::InitPacket get_init_packet() {
+        mobility::packets::InitPacket pkt {};
 
-            pkt.overwrite_pinout = overwrite_pinout_ ? 1 : 0;
-            for (int i = 0; i < 4; i++) {
-                pkt.lpwm_pins[i] = motor_lpwm_pins_[i];
-                pkt.rpwm_pins[i] = motor_rpwm_pins_[i];
-                pkt.encoder_a_pins[i] = motor_encoder_a_pins_[i];
-                pkt.motor_swap_dirs[i] = motor_swap_dirs_[i];
-            }
-            pkt.max_dutycycle = max_pwm_dutycycle_;
-            pkt.max_velocity = max_velocity_;
-            pkt.lowpass_fc = velocity_filter_cutoff_hz_;
-
-            pkt.kp = pid_kp_;
-            pkt.ki = pid_ki_;
-            pkt.kd = pid_kd_;
-
-            pkt.p_bound = pid_p_bound_;
-            pkt.i_bound = pid_i_bound_;
-            pkt.d_bound = pid_d_bound_;
-
-            pkt.feedback_hz = feedback_rate_hz_;
-            pkt.control_hz = motor_control_rate_hz_;
-
-            pkt.is_open_loop = is_open_loop_ ? 1 : 0;
-
-            if (!protocol_->send_init_packet(pkt)) {
-                return false;
-            }
-
-            if (pkt.overwrite_pinout) {
-                RCLCPP_INFO(this->get_logger(), "Overwritten Pinout:");
-                RCLCPP_INFO(this->get_logger(), "LPWM Pins: FL:%d, FR:%d, BL:%d, BR:%d",
-                    (int) pkt.lpwm_pins[0], (int) pkt.lpwm_pins[1], (int) pkt.lpwm_pins[2], (int) pkt.lpwm_pins[3]);
-                RCLCPP_INFO(this->get_logger(), "RPWM Pins: FL:%d, FR:%d, BL:%d, BR:%d",
-                    (int) pkt.rpwm_pins[0], (int) pkt.rpwm_pins[1], (int) pkt.rpwm_pins[2], (int) pkt.rpwm_pins[3]);
-                RCLCPP_INFO(this->get_logger(), "Encoder A Pins: FL:%d, FR:%d, BL:%d, BR:%d",
-                    (int) pkt.encoder_a_pins[0], (int) pkt.encoder_a_pins[1], (int) pkt.encoder_a_pins[2], (int) pkt.encoder_a_pins[3]);
-            }
-
-            RCLCPP_INFO(this->get_logger(), "Motor Directions: %s,%s,%s,%s",
-                pkt.motor_swap_dirs[0] ? "FL: Swapped " : "Not Swapped ",
-                pkt.motor_swap_dirs[1] ? "FR: Swapped " : "Not Swapped ",
-                pkt.motor_swap_dirs[2] ? "BL: Swapped " : "Not Swapped ",
-                pkt.motor_swap_dirs[3] ? "BR: Swapped " : "Not Swapped ");
-
-            RCLCPP_INFO(this->get_logger(), "Setted maximum PWM dutycycle: %f", pkt.max_dutycycle);
-            RCLCPP_INFO(this->get_logger(), "Setted new maximum velocity: %.3f", pkt.max_velocity);
-            RCLCPP_INFO(this->get_logger(), "Setted new velocity filter cutoff: %f Hz", pkt.lowpass_fc);
-            RCLCPP_INFO(this->get_logger(), "Setted new PID parameters: kp:%f, ki:%f, kd:%f", pkt.kp, pkt.ki, pkt.kd);
-            RCLCPP_INFO(this->get_logger(), "Setted new PID boundaries: p:%f, i:%f, d:%f", pkt.p_bound, pkt.i_bound, pkt.d_bound);
-            RCLCPP_INFO(this->get_logger(), "Setted new motor control rate: %f Hz", pkt.control_hz);
-            RCLCPP_INFO(this->get_logger(), "Setted new feedback rate: %f Hz", pkt.feedback_hz);
-            RCLCPP_INFO(this->get_logger(), "Enabled %s control", pkt.is_open_loop ? "open loop" : "closed loop");
-
-            return true;
-        } catch (std::runtime_error& err) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to initialize device");
-            return false;
+        pkt.overwrite_pinout = overwrite_pinout_ ? 1 : 0;
+        for (int i = 0; i < 4; i++) {
+            pkt.lpwm_pins[i] = motor_lpwm_pins_[i];
+            pkt.rpwm_pins[i] = motor_rpwm_pins_[i];
+            pkt.encoder_a_pins[i] = motor_encoder_a_pins_[i];
+            pkt.motor_swap_dirs[i] = motor_swap_dirs_[i];
         }
+        pkt.max_dutycycle = max_pwm_dutycycle_;
+        pkt.max_velocity = max_velocity_;
+        pkt.lowpass_fc = velocity_filter_cutoff_hz_;
+
+        pkt.kp = pid_kp_;
+        pkt.ki = pid_ki_;
+        pkt.kd = pid_kd_;
+
+        pkt.p_bound = pid_p_bound_;
+        pkt.i_bound = pid_i_bound_;
+        pkt.d_bound = pid_d_bound_;
+
+        pkt.feedback_hz = feedback_rate_hz_;
+        pkt.control_hz = motor_control_rate_hz_;
+
+        pkt.is_open_loop = is_open_loop_ ? 1 : 0;
+
+        return pkt;
     }
+
 
     void init_parameters() {
 
         protocol_type_ = this->declare_parameter("protocol", protocol_type_);
-        device_id_ = this->declare_parameter("device_id", device_id_);
 
         command_publish_rate_hz_ = this->declare_parameter("command_publish_rate", command_publish_rate_hz_);
         feedback_rate_hz_ = this->declare_parameter("feedback_rate", feedback_rate_hz_);

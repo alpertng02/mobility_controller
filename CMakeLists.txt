@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.8)
 project(mobility_controller)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  add_compile_options(-Wall -Wextra)
 endif()
 
 # find dependencies
@@ -17,13 +17,13 @@ find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 
-set(CXX_STANDARD 20)
-
 add_executable(${PROJECT_NAME}
   src/mobility_controller_node.cpp
   src/serialib.cpp
-  src/icommunication_protocol.cpp
-  src/usb_protocol.cpp
+  src/imobility_device.cpp
+  src/mobility_packets.c
+  src/mobility_packets.cpp
+  src/usb_device.cpp
   )
 target_include_directories(${PROJECT_NAME} PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/include

@@ -6,91 +6,90 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 
-#define FRAME_START					(0x31313131)
-#define FRAME_END					(0x69696969)
+#include "mobility_packet_types.h"
 
-#define MOBILITY_DEVICE_ID			(0x656B696E)	
 
-typedef enum {
-	set_velocity = 0,
-	set_dutycycle = 1,
-	set_maximum_dutycycle = 2,
-	set_lowpass_fc = 3,
-	set_pid_params = 4,
-	set_pid_bounds = 5,
-	set_ff_params = 6,
-	set_max_velocity = 7,
-	set_feedback_hz = 8,
-	set_control_hz = 9,
+    /* ==============================
+     * API
+     * ============================== */
 
-	open_loop_enable = 10,
-	running_mode_enable = 11,
-	init_mode_enable = 12,
-	send_device_state = 13
+     /* --- Serialization helpers --- */
+    uint16_t mobility_next_sequence(void);
+    uint32_t mobility_crc32(const void* data, size_t len);
 
-} MobilityCommands;
+    /* --- Building packets --- */
+    size_t mobility_packet_header_size(void);
 
-#pragma pack(push, 1)
-typedef struct {
-	uint32_t frame_start;
+    size_t mobility_packet_enable_size(void);
+    size_t mobility_packet_motor_floats_size(void);
 
-	uint32_t overwrite_pinout;
+    size_t mobility_packet_size_for_request(void);
+    size_t mobility_packet_size_for_motor_velocities(void);
+    size_t mobility_packet_size_for_motor_duties(void);
+    size_t mobility_packet_size_for_init(void);
+    size_t mobility_packet_size_for_device_state(void);
+    size_t mobility_packet_size_for_feedback(void);
 
-	uint8_t lpwm_pins[4];
-	uint8_t rpwm_pins[4];
 
-	uint8_t encoder_a_pins[4];
+    /* --- Packing --- */
+    bool mobility_pack_motor_velocities_packet(uint8_t* buf, size_t buf_size,
+        uint64_t time_since_boot_us,
+        const float velocities[MOBILITY_MOTOR_COUNT]);
 
-	uint8_t motor_swap_dirs[4];
+    bool mobility_pack_motor_dutycycles_packet(uint8_t* buf, size_t buf_size,
+        uint64_t time_since_boot_us,
+        const float duties[MOBILITY_MOTOR_COUNT]);
 
-	float max_dutycycle;
-	float max_velocity;
-	float lowpass_fc;
-	float kp;
-	float ki;
-	float kd;
-	float p_bound;
-	float i_bound;
-	float d_bound;
-	float feedback_hz;
-	float control_hz;
-	uint32_t is_open_loop;
+    bool mobility_pack_init_packet(uint8_t* buf, size_t buf_size,
+        uint64_t time_since_boot_us,
+        const MobilityInitPacket* init);
 
-	uint32_t frame_end;
-} MobilityInitPacket;
-#pragma pack(pop)
+    bool mobility_pack_enable_packet(uint8_t* buf, size_t buf_size,
+        uint64_t time_since_boot_us, MobilityCommands command, bool enable);
 
-#pragma pack(push, 1)
-typedef struct {
-	uint32_t frame_start;
-	int32_t command_id;   // 0: set velocity, 1: set PWM, etc.
-	float values[4];
-	uint32_t frame_end;
-} MobilityCommandPacket;
-#pragma pack(pop)
+    bool mobility_pack_request_device_state_packet(uint8_t* buf, size_t buf_size,
+        uint64_t time_since_boot_us);
 
-#pragma pack(push, 1)
-typedef struct {
-	uint32_t frame_start;
-	float positions[4];
-	float velocities[4];
-	float pwm_duties[4];
-	uint32_t frame_end;
-} MobilityFeedbackPacket;
-#pragma pack(pop)
+    bool mobility_pack_request_feedback_packet(uint8_t* buf, size_t buf_size,
+        uint64_t time_since_boot_us);
 
-#pragma pack(push, 1)
-typedef struct {
-	uint32_t frame_start;
+    bool mobility_pack_device_state_packet(uint8_t* buf, size_t buf_size,
+        uint64_t time_since_boot_us,
+        const MobilityDeviceState* state);
 
-	uint32_t device_id;
-	uint16_t is_running;
-	uint16_t init_mode_enabled;
+    bool mobility_pack_feedback_packet(uint8_t* buf, size_t buf_size,
+        uint64_t time_since_boot_us,
+        const MobilityFeedback* feedback);
 
-	uint32_t frame_end;
-} MobilityStatePacket;
-#pragma pack(pop)
+    /* --- Unpacking --- */
+
+    bool mobility_unpack_packet_header(const uint8_t* buf, size_t buf_size,
+        MobilityPacketHeader* out_header);
+
+    /* --- Unpacking Payloads --- */
+
+    bool mobility_unpack_motor_velocities_from_payload(const uint8_t* payload, size_t payload_size,
+        float out_velocities[MOBILITY_MOTOR_COUNT]);
+
+    bool mobility_unpack_motor_dutycycles_from_payload(const uint8_t* payload, size_t payload_size,
+        float out_velocities[MOBILITY_MOTOR_COUNT]);
+
+    bool mobility_unpack_init_packet_from_payload(const uint8_t* payload, size_t payload_size,
+        MobilityInitPacket* out_init);
+
+    bool mobility_unpack_enable_from_payload(const uint8_t* payload, size_t payload_size,
+        bool* out_enable);
+
+    bool mobility_unpack_device_state_packet_from_payload(const uint8_t* payload, size_t payload_size,
+        MobilityDeviceState* out_state);
+
+    bool mobility_unpack_feedback_packet_from_payload(const uint8_t* payload, size_t payload_size,
+        MobilityFeedback* out_feedback);
+
+
 
 #ifdef __cplusplus
 }
