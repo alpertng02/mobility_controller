@@ -647,6 +647,10 @@ private:
         linear_x_max_acceleration_ = this->declare_parameter("linear.x.max_acceleration", linear_x_max_acceleration_);
         linear_x_min_acceleration_ = this->declare_parameter("linear.x.min_acceleration", linear_x_min_acceleration_);
 
+        angular_z_has_velocity_limits_ = this->declare_parameter("angular.z.has_velocity_limits", angular_z_has_velocity_limits_);
+        angular_z_max_velocity_ = this->declare_parameter("angular.z.max_velocity", angular_z_max_velocity_);
+        angular_z_min_velocity_ = this->declare_parameter("angular.z.min_velocity", angular_z_min_velocity_);
+
         angular_z_has_acceleration_limits_ = this->declare_parameter("angular.z.has_acceleration_limits", angular_z_has_acceleration_limits_);
         angular_z_max_acceleration_ = this->declare_parameter("angular.z.max_acceleration", angular_z_max_acceleration_);
         angular_z_min_acceleration_ = this->declare_parameter("angular.z.min_acceleration", angular_z_min_acceleration_);
