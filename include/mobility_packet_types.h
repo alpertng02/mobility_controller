@@ -59,6 +59,7 @@ typedef struct {
 	uint8_t encoder_a_pins[4];
 
 	uint8_t motor_swap_dirs[4];
+    uint8_t encoder_swap_dirs[4];
 
 	float max_dutycycle;
 	float max_velocity;

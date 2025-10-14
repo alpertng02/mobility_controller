@@ -106,6 +106,7 @@ private:
     std::vector<int64_t> motor_rpwm_pins_ { 3, 5, 7, 9 };
     std::vector<int64_t> motor_encoder_a_pins_ { 10, 12, 14, 20 };
     std::vector<int64_t> motor_swap_dirs_ { 0, 0, 0, 0 };
+    std::vector<int64_t> encoder_swap_dirs_ { 0, 0, 0, 0 };
 
     double wheel_separation_ = 1.0;
     double wheel_radius_ = 0.15;
@@ -467,6 +468,7 @@ private:
             pkt.rpwm_pins[i] = motor_rpwm_pins_[i];
             pkt.encoder_a_pins[i] = motor_encoder_a_pins_[i];
             pkt.motor_swap_dirs[i] = motor_swap_dirs_[i];
+            pkt.encoder_swap_dirs[i] = encoder_swap_dirs_[i];
         }
         pkt.max_dutycycle = max_pwm_dutycycle_;
         pkt.max_velocity = max_velocity_;
@@ -527,6 +529,7 @@ private:
         motor_rpwm_pins_ = this->declare_parameter("motor_rpwm_pins", motor_rpwm_pins_);
         motor_encoder_a_pins_ = this->declare_parameter("motor_encoder_a_pins", motor_encoder_a_pins_);
         motor_swap_dirs_ = this->declare_parameter("motor_swap_dirs", motor_swap_dirs_);
+        encoder_swap_dirs_ = this->declare_parameter("encoder_swap_dirs", encoder_swap_dirs_);
 
         base_frame_id_ = this->declare_parameter("base_frame_id", base_frame_id_);
         odom_frame_id_ = this->declare_parameter("odom_frame_id", odom_frame_id_);
