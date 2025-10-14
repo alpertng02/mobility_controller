@@ -243,7 +243,7 @@ This is a licence-free software, it can be used by anyone who try to build a bet
  
  
      // Open device
-     fd = open(Device, O_RDWR | O_NOCTTY | O_NDELAY);
+     fd = open(Device, O_RDWR | O_NOCTTY | O_NDELAY | O_NONBLOCK);
      // If the device is not open, return -2
      if (fd == -1) return -2;
      // Open the device in nonblocking mode

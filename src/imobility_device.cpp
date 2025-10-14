@@ -187,6 +187,11 @@ std::vector<uint8_t> IMobilityDevice::receive_packet(std::chrono::milliseconds t
 
     while (true) {
 
+        // Check timeout
+        if (std::chrono::steady_clock::now() - start_time > timeout) {
+            throw std::runtime_error("Timeout while waiting for packet");
+        }
+
         // Read new data
         uint8_t temp[128];
         int bytes_read = this->read_bytes(temp, sizeof(temp), timeout);
@@ -257,10 +262,7 @@ std::vector<uint8_t> IMobilityDevice::receive_packet(std::chrono::milliseconds t
         if (buffer.size() > 2048) {
             buffer.clear();
         }
-        // Check timeout
-        if (std::chrono::steady_clock::now() - start_time > timeout) {
-            throw std::runtime_error("Timeout while waiting for packet");
-        }
+
     }
 }
 

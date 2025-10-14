@@ -201,7 +201,6 @@ private:
     }
 
     bool try_connect_device(std::chrono::milliseconds timeout) {
-
         auto available_ports = device_->list_all_ports();
 
         if (available_ports.empty()) {
@@ -233,6 +232,7 @@ private:
     }
 
     void device_connection_callback() {
+        RCLCPP_INFO(this->get_logger(), "Device Connection Callback!");
         if (!device_->is_open()) {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Device Disconnected");
             enable_timers(false);
@@ -261,6 +261,7 @@ private:
     void publish_odometry_and_joint_states() {
         rclcpp::Time current_time = this->get_clock()->now();
         double dt = (current_time - prev_odom_time_).seconds();
+        prev_odom_time_ = current_time;
 
         try {
             feedback_ = device_->receive_motor_feedback(std::chrono::milliseconds(5)).feedback;
@@ -277,8 +278,6 @@ private:
                 feedback_.velocities[0], feedback_.velocities[1], feedback_.velocities[2], feedback_.velocities[3]);
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 100, "TargetVel: T0:%.2f, T1:%.2f, T2:%.2f, T3:%.2f",
                 target_velocities_[0], target_velocities_[1], target_velocities_[2], target_velocities_[3]);
-            prev_log_time_ = current_time;
-
             
             double robot_linear_velocity = 0;
             double robot_angular_velocity = 0;
@@ -369,10 +368,8 @@ private:
             }
             joint_state_publisher_->publish(wheel_joint_states_);
             
-            prev_odom_time_ = current_time;
-
         } catch (std::runtime_error& err) {
-            RCLCPP_WARN(this->get_logger(), "Could not receive joint feedbacks");
+            RCLCPP_WARN(this->get_logger(), "Could not receive motor feedbacks");
         }
     }
     
