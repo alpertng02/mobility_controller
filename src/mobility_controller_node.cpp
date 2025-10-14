@@ -102,13 +102,13 @@ private:
     std::string joint_states_topic_ { "joint_states" };
 
     bool overwrite_pinout_ { false };
-    std::vector<int64_t> motor_lpwm_pins_ { 2, 6, 4, 8 };
-    std::vector<int64_t> motor_rpwm_pins_ { 3, 7, 5, 9 };
-    std::vector<int64_t> motor_encoder_a_pins_ { 10, 14, 12, 2 };
+    std::vector<int64_t> motor_lpwm_pins_ { 2, 4, 6, 8 };
+    std::vector<int64_t> motor_rpwm_pins_ { 3, 5, 7, 9 };
+    std::vector<int64_t> motor_encoder_a_pins_ { 10, 12, 14, 20 };
     std::vector<int64_t> motor_swap_dirs_ { 0, 0, 0, 0 };
 
     double wheel_separation_ = 1.0;
-    double wheel_radius_ = 0.1;
+    double wheel_radius_ = 0.15;
     double wheel_reduction_ = 100;
     double wheel_encoder_cpr_ = 64;
     std::vector<double> wheel_encoder_velocities_steps_sec {
@@ -128,12 +128,12 @@ private:
     std::vector<double> twist_covariance_diagonal_ { 0.002, 0.0, 0.0, 0.0, 0.0, 0.02 };
 
     double max_pwm_dutycycle_ { 60.0 };
-    double max_velocity_ { 30000.0 };
+    double max_velocity_ { 20000.0 };
     double velocity_filter_cutoff_hz_ { 100.0 };
 
-    double pid_kp_ { 1.0 };
-    double pid_ki_ { 0.01 };
-    double pid_kd_ { 0.0001 };
+    double pid_kp_ { 0.06 };
+    double pid_ki_ { 0.00 };
+    double pid_kd_ { 0.00 };
 
     double pid_p_bound_ { 100.0f };
     double pid_i_bound_ { 50.0f };
@@ -263,7 +263,7 @@ private:
         double dt = (current_time - prev_odom_time_).seconds();
 
         try {
-            feedback_ = device_->receive_motor_feedback(std::chrono::milliseconds(20)).feedback;
+            feedback_ = device_->receive_motor_feedback(std::chrono::milliseconds(5)).feedback;
 
             for (int i = 0; i < 4; i++) {
                 wheel_encoder_velocities_steps_sec[i] = feedback_.velocities[i];

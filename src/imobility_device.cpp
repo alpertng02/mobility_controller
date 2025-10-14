@@ -98,23 +98,24 @@ bool IMobilityDevice::init_device(const mobility::packets::InitPacket& init_pack
     try {
 
         auto start_time = std::chrono::steady_clock::now();
-        auto device_state = this->receive_device_state(std::chrono::milliseconds(5));
+        auto device_state = this->receive_device_state(std::chrono::milliseconds(20));
         while (device_state.state.device_is_init) {
-            if (this->send_init_mode_enable(true)) {
-                device_state = this->receive_device_state(std::chrono::milliseconds(5));
-            }
             auto current_time = std::chrono::steady_clock::now();
             auto total_time = current_time - start_time;
             if (total_time > timeout) {
                 return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (this->send_init_mode_enable(true)) {
+                device_state = this->receive_device_state(std::chrono::milliseconds(20));
             }
         }
 
         if (!this->send_init_packet(init_packet)) {
             return false;
         }
-
-        device_state = this->receive_device_state(std::chrono::milliseconds(5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        device_state = this->receive_device_state(std::chrono::milliseconds(20));
         if (device_state.state.device_is_init && device_state.state.device_is_running) {
             return true;
         }
@@ -185,13 +186,9 @@ std::vector<uint8_t> IMobilityDevice::receive_packet(std::chrono::milliseconds t
     auto start_time = std::chrono::steady_clock::now();
 
     while (true) {
-        // Check timeout
-        if (std::chrono::steady_clock::now() - start_time > timeout) {
-            throw std::runtime_error("Timeout while waiting for packet");
-        }
 
         // Read new data
-        uint8_t temp[64];
+        uint8_t temp[128];
         int bytes_read = this->read_bytes(temp, sizeof(temp), timeout);
         if (bytes_read < 0)
             throw std::runtime_error("Error reading from device");
@@ -248,9 +245,9 @@ std::vector<uint8_t> IMobilityDevice::receive_packet(std::chrono::milliseconds t
                 // Bad CRC — discard first byte, resync
                 buffer.erase(buffer.begin());
                 continue;
-            }*/
+                }*/
 
-            // Valid packet found
+                // Valid packet found
             std::vector<uint8_t> packet(buffer.begin(), buffer.begin() + full_packet_size);
             buffer.erase(buffer.begin(), buffer.begin() + full_packet_size);
             return packet;
@@ -259,6 +256,10 @@ std::vector<uint8_t> IMobilityDevice::receive_packet(std::chrono::milliseconds t
         // Prevent runaway memory use
         if (buffer.size() > 2048) {
             buffer.clear();
+        }
+        // Check timeout
+        if (std::chrono::steady_clock::now() - start_time > timeout) {
+            throw std::runtime_error("Timeout while waiting for packet");
         }
     }
 }
