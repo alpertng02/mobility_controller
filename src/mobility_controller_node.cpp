@@ -108,7 +108,7 @@ private:
     bool overwrite_pinout_ { false };
     std::vector<int64_t> motor_lpwm_pins_ { 2, 6, 4, 8 };
     std::vector<int64_t> motor_rpwm_pins_ { 3, 7, 5, 9 };
-    std::vector<int64_t> motor_encoder_a_pins_ { 10, 14, 12, 2 };
+    std::vector<int64_t> motor_encoder_a_pins_ { 10, 12, 14, 2 };
     std::vector<int64_t> motor_swap_dirs_ { 0, 0, 0, 0 };
 
     double wheel_separation_ = 1.0;
@@ -131,13 +131,13 @@ private:
     std::vector<double> pose_covariance_diagonal_ { 0.002, 0.002, 0.0, 0.0, 0.0, 0.02 };
     std::vector<double> twist_covariance_diagonal_ { 0.002, 0.0, 0.0, 0.0, 0.0, 0.02 };
 
-    double max_pwm_dutycycle_ { 60.0 };
-    double max_velocity_ { 30000.0 };
+    double max_pwm_dutycycle_ { 80.0 };
+    double max_velocity_ { 20000.0 };
     double velocity_filter_cutoff_hz_ { 100.0 };
 
-    double pid_kp_ { 1.0 };
-    double pid_ki_ { 0.01 };
-    double pid_kd_ { 0.0001 };
+    double pid_kp_ { 0.00625 };
+    double pid_ki_ { 0.0 };
+    double pid_kd_ { 0.0 };
 
     double pid_p_bound_ { 100.0f };
     double pid_i_bound_ { 50.0f };
@@ -145,7 +145,7 @@ private:
 
     double motor_control_rate_hz_ = 1000.0;
     double feedback_rate_hz_ = 200.0;
-    double command_publish_rate_hz_ = 50.0;
+    double command_publish_rate_hz_ = 60.0;
 
     double cmd_vel_timeout_sec_ = 0.5;
 
