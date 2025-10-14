@@ -106,9 +106,9 @@ private:
     std::string joint_states_topic_ { "joint_states" };
 
     bool overwrite_pinout_ { false };
-    std::vector<int64_t> motor_lpwm_pins_ { 2, 6, 4, 8 };
-    std::vector<int64_t> motor_rpwm_pins_ { 3, 7, 5, 9 };
-    std::vector<int64_t> motor_encoder_a_pins_ { 10, 12, 14, 2 };
+    std::vector<int64_t> motor_lpwm_pins_ { 2, 4, 6, 8 };
+    std::vector<int64_t> motor_rpwm_pins_ { 3, 5, 7, 9 };
+    std::vector<int64_t> motor_encoder_a_pins_ { 10, 12, 14, 20 };
     std::vector<int64_t> motor_swap_dirs_ { 0, 0, 0, 0 };
 
     double wheel_separation_ = 1.0;
